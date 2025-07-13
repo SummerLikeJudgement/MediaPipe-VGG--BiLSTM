@@ -2,7 +2,7 @@ from torch import nn
 import torch
 
 class BiLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):# 特征维度， seq_len， 输出维度
+    def __init__(self, input_size, hidden_size, output_size):# 特征维度， 隐藏状态/细胞状态的维度， 输出维度
         super(BiLSTM, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -41,7 +41,7 @@ class BiLSTM(nn.Module):
             c_hat_t = self.tanh(self.Wc(combined))
             forward_cell_state = f_t * forward_cell_state + i_t * c_hat_t
             forward_hidden_state = o_t * self.tanh(forward_cell_state)
-            forward_outputs.append(forward_hidden_state.unsqueeze(1))
+            forward_outputs.append(forward_hidden_state.unsqueeze(1)) # (batch_size, 1, hidden_size)
         # 反向
         for i in reversed(range(seq_len)):
             combined = torch.cat((input[:, i, :], backward_hidden_state), dim=1)
@@ -51,16 +51,67 @@ class BiLSTM(nn.Module):
             c_hat_t = self.tanh(self.Wc(combined))
             backward_cell_state = f_t * backward_cell_state + i_t * c_hat_t
             backward_hidden_state = o_t * self.tanh(backward_cell_state)
-            backward_outputs.insert(0, backward_hidden_state.unsqueeze(1))
+            backward_outputs.insert(0, backward_hidden_state.unsqueeze(1)) # (batch_size, 1, hidden_size)
 
-        forward_outputs = torch.cat(forward_outputs, dim=1)# (batch_size, seq_len, features)
-        backward_outputs = torch.cat(backward_outputs, dim=1)# (batch_size, seq_len, features)
-        outputs = torch.cat((forward_outputs, backward_outputs), dim=2)
+        forward_outputs = torch.cat(forward_outputs, dim=1)# (batch_size, seq_len, hidden_size)
+        backward_outputs = torch.cat(backward_outputs, dim=1)# (batch_size, seq_len, hidden_size)
+        outputs = torch.cat((forward_outputs, backward_outputs), dim=2) # (batch_size, seq_len, hidden_size*2)
 
-        final_output = self.output_layer(outputs)
-        return final_output, (forward_hidden_state, backward_hidden_state)
+        final_output = self.output_layer(outputs)# (batch_size, seq_len, outsize)
+        return final_output
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, embed_size, num_heads):# embed_size = num_heads*head_dim
+        super(MultiHeadAttention, self).__init__()
+        self.embed_size = embed_size
+        self.num_heads = num_heads
+        self.head_dim = embed_size // num_heads
+
+        assert self.head_dim * num_heads == embed_size, "Embed size needs to be divisible by heads"
+        # qkv线性变换
+        self.q = nn.Linear(embed_size, embed_size)
+        self.k = nn.Linear(embed_size, embed_size)
+        self.v = nn.Linear(embed_size, embed_size)
+        # 输出
+        self.out = nn.Linear(embed_size, embed_size)
+        self.scale = self.head_dim ** 0.5
+    def forward(self, x):# x(batch_size, seq_len, features) features=head_dim*num_heads
+        batch_size, seq_len, features = x.shape
+        # QKV
+        Q = self.q(x)
+        K = self.k(x)
+        V = self.v(x)
+        # 划分多头 (batch_size, seq_len, num_heads, head_dim)
+        Q = Q.view(batch_size, seq_len, self.num_heads, self.head_dim)
+        K = K.view(batch_size, seq_len, self.num_heads, self.head_dim)
+        V = V.view(batch_size, seq_len, self.num_heads, self.head_dim)
+        # 注意力分数计算
+        attn_score = torch.matmul(Q, K.transpose(2, 3)) / self.scale # (batch_size, seq_len, num_heads, num_heads)
+        attn_probs = torch.softmax(attn_score, dim=-1) # 对注意力分数归一化，纯数学操作，无参数
+        attn_out = torch.matmul(attn_probs, V) # (batch_size, seq_len, num_heads, head_dim)
+        # 合并多头
+        attn_out = attn_out.contiguous().view(batch_size, seq_len, -1)
+        # 输出映射
+        out = self.out(attn_out)# (batch_size, seq_len, features)
+        return out
 
 class lstm(nn.Module):
     def __init__(self):
         super(lstm, self).__init__()
-        self.lstm = BiLSTM(input_size=468*3, hidden_size=128, output_size=468)
+        self.lstm = BiLSTM(input_size=468*3, hidden_size=128, output_size=128)
+        self.norm = nn.BatchNorm1d(128)
+        self.attn = MultiHeadAttention(embed_size=128, num_heads=8)
+
+    def forward(self, x):# x(batch_size, seq_len, input_size/features_size)
+        x = self.lstm(x) # (batch_size, 64, 468*3)->(batch_size, 64, 128)
+        x = x.transpose(1, 2)
+        x = self.norm(x)# (batch_size, 128, 64)->(batch_size, 128, 64)
+        x = x.transpose(1, 2)
+        x = self.attn(x)# (batch_size, 64, 128)->(batch_size, 64, 128)
+        return x
+
+if __name__ == '__main__':
+    model = lstm()
+    x = torch.randn(2, 64, 468*3)
+    y = model(x)
+    print(y.shape)
