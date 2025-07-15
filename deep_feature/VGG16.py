@@ -36,7 +36,7 @@ class denselayer(nn.Module):
 class VGG(nn.Module):
     def __init__(self):
         super(VGG, self).__init__()
-        self.vgg = models.vgg16(pretrained=False).features # 只使用全卷积层
+        self.vgg = models.vgg16(pretrained = True).features # 只使用全卷积层
         self.avgpool = nn.AdaptiveMaxPool2d((1,1)) # 全局平均池化
         self.dense = denselayer(512) # 全连接
         self.se = selayer(512) # SE
@@ -51,3 +51,4 @@ if __name__ == "__main__":
     vgg = VGG()
     tensor = torch.randn(2, 3, 224, 224)
     print(vgg(tensor).shape)
+    print(vgg)

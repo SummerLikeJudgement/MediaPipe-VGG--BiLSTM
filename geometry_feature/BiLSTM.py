@@ -95,23 +95,24 @@ class MultiHeadAttention(nn.Module):
         out = self.out(attn_out)# (batch_size, seq_len, features)
         return out
 
-class lstm(nn.Module):
+class LSTM(nn.Module):
     def __init__(self):
-        super(lstm, self).__init__()
+        super(LSTM, self).__init__()
         self.lstm = BiLSTM(input_size=468*3, hidden_size=128, output_size=128)
         self.norm = nn.BatchNorm1d(128)
         self.attn = MultiHeadAttention(embed_size=128, num_heads=8)
+        self.avgpool = nn.AdaptiveMaxPool1d(1)
 
     def forward(self, x):# x(batch_size, seq_len, input_size/features_size)
-        x = self.lstm(x) # (batch_size, 64, 468*3)->(batch_size, 64, 128)
-        x = x.transpose(1, 2)
-        x = self.norm(x)# (batch_size, 128, 64)->(batch_size, 128, 64)
-        x = x.transpose(1, 2)
-        x = self.attn(x)# (batch_size, 64, 128)->(batch_size, 64, 128)
+        x = self.lstm(x) # (batch_size, 128, 468*3)->(batch_size, 128, 128)
+        x = self.norm(x.transpose(1, 2))# (batch_size, 128, 128)->(batch_size, 128, 128)
+        x = self.attn(x.transpose(1, 2))# (batch_size, 128, 128)->(batch_size, 128, 128)
+        x = self.avgpool(x)# (batch_size, 128, 128)->(batch_size, 128, 1)
         return x
 
 if __name__ == '__main__':
-    model = lstm()
-    x = torch.randn(2, 64, 468*3)
+    model = LSTM()
+    x = torch.randn(2, 128, 468*3)
     y = model(x)
     print(y.shape)
+    print(model)
